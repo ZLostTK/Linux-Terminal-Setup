@@ -181,12 +181,57 @@ ok "Kitty config written to $KITTY_CONF"
 echo ""
 echo ">>> [7/7] Installing Fastfetch..."
 
-case "$PKG" in
-    apt)    sudo apt install -y fastfetch ;;
-    pacman) sudo pacman -S --noconfirm fastfetch ;;
-    dnf)    sudo dnf install -y fastfetch ;;
-    zypper) sudo zypper install -y fastfetch ;;
-esac && ok "Fastfetch installed." || warn "Fastfetch install failed."
+install_fastfetch_apt() {
+    case "$PKG" in
+        apt)
+            sudo apt update -y
+            sudo apt install -y fastfetch
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm fastfetch
+            ;;
+        dnf)
+            sudo dnf install -y fastfetch
+            ;;
+        zypper)
+            sudo zypper install -y fastfetch
+            ;;
+    esac
+}
+
+# 1. Try installing with package manager
+if install_fastfetch_apt; then
+    ok "Fastfetch installed via package manager."
+else
+    warn "Fastfetch install via package manager failed."
+
+    if [ "$PKG" = "apt" ]; then
+        echo "Attempting to add Fastfetch PPA and install..."
+
+        # Add PPA and try again
+        if sudo add-apt-repository -y ppa:zhangsongcui3371/fastfetch \
+           && sudo apt update -y \
+           && sudo apt install -y fastfetch; then
+            ok "Fastfetch installed via PPA."
+        else
+            warn "PPA install failed. Trying GitHub .deb..."
+
+            # Download deb from GitHub releases
+            ARCH=$(dpkg --print-architecture)
+            DEB_URL=$(curl -fsSL "https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest" \
+                      | grep "fastfetch-linux-${ARCH}\.deb" \
+                      | cut -d '"' -f 4)
+
+            if [ -n "$DEB_URL" ] && wget -q "$DEB_URL" -O /tmp/fastfetch.deb \
+               && sudo dpkg -i /tmp/fastfetch.deb \
+               && sudo apt --fix-broken install -y; then
+                ok "Fastfetch installed from GitHub .deb."
+            else
+                warn "Fastfetch install failed completely."
+            fi
+        fi
+    fi
+fi
 
 FASTFETCH_DIR="$HOME/.config/fastfetch"
 ASSETS_DIR="$FASTFETCH_DIR/assets"
