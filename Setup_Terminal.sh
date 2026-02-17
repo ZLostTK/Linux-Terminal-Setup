@@ -62,7 +62,7 @@ NERD_FONTS=(
 )
 
 for font in "${NERD_FONTS[@]}"; do
-    URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/${font}.zip"
+    URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/${font}.zip"
     TMPZIP="/tmp/${font}.zip"
     echo "  Downloading $font Nerd Font..."
     if wget -q --tries=3 --timeout=30 -O "$TMPZIP" "$URL"; then
