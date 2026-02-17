@@ -136,23 +136,50 @@ shell            $(which zsh)
 EOF
 
 ########################################
-# 7. Instalar Fastfetch (información sistema)
+# 7. Instalar y configurar Fastfetch
 ########################################
 echo "Installing Fastfetch..."
+
 case "$PKG" in
     apt)
-        $INSTALL fastfetch
+        sudo apt install -y fastfetch
         ;;
     pacman)
-        $INSTALL fastfetch
+        sudo pacman -S --noconfirm fastfetch
         ;;
-    dnf|zypper)
-        $INSTALL fastfetch
+    dnf)
+        sudo dnf install -y fastfetch
+        ;;
+    zypper)
+        sudo zypper install -y fastfetch
         ;;
 esac
 
-# Añadir Fastfetch al inicio de ZSH
-grep -qxF 'fastfetch' ~/.zshrc || echo 'fastfetch' >> ~/.zshrc
+echo "Configuring Fastfetch..."
+
+FASTFETCH_DIR="$HOME/.config/fastfetch"
+ASSETS_DIR="$FASTFETCH_DIR/assets"
+
+mkdir -p "$ASSETS_DIR"
+
+# Descargar configuración
+curl -fsSL \
+https://raw.githubusercontent.com/itsfoss/text-script-files/refs/heads/master/config/fastfetch/sample_2.jsonc \
+-o "$FASTFETCH_DIR/sample_2.jsonc"
+
+# Descargar imagen
+curl -fsSL \
+https://raw.githubusercontent.com/itsfoss/text-script-files/refs/heads/master/config/fastfetch/assets/jedi.png \
+-o "$ASSETS_DIR/jedi.png"
+
+echo "Fastfetch config and image downloaded."
+
+# Añadir ejecución personalizada al .zshrc (evitar duplicados)
+if ! grep -q "fastfetch -c ~/.config/fastfetch/sample_2.jsonc" "$HOME/.zshrc"; then
+    echo 'fastfetch -c ~/.config/fastfetch/sample_2.jsonc' >> "$HOME/.zshrc"
+fi
+
+echo "Fastfetch configured successfully."
 
 ########################################
 # 8. Final
