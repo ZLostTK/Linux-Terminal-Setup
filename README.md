@@ -87,3 +87,4 @@ Puedes abrir issues o pull requests para mejorar compatibilidad, añadir nuevas 
 ---
 
 Gracias por usar este script 
+<img width="936" height="396" alt="image" src="https://github.com/user-attachments/assets/fe21be10-8e4b-4cdd-93b2-bab88aa941aa" />
