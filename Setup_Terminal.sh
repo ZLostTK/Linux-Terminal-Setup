@@ -150,28 +150,37 @@ grep -qxF 'eval "$(atuin init zsh)"' ~/.zshrc \
 ########################################
 section "[6/7] Installing Kitty terminal emulator..."
 
-# --- Instalar Kitty ---
+# ── Instalador oficial (fallback universal) ──────────────────────────────────
+install_kitty_official() {
+    curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin \
+        && ok "Kitty installed via official kovidgoyal installer." \
+        || { fail "Kitty installation failed completely."; return 1; }
+}
+
+# --- Instalar Kitty (repo primero, official installer como fallback) ---
 case "$PKG" in
     apt)
-        if $INSTALL kitty; then
-            ok "Kitty installed via apt."
-        else
-            warn "apt install kitty falló, intentando instalador oficial de kovidgoyal..."
-            curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin \
-                && ok "Kitty installed via official installer." \
-                || fail "Kitty installation failed completely."
-        fi
+        $INSTALL kitty && ok "Kitty installed via apt." \
+            || { warn "apt install kitty falló, intentando instalador oficial..."; install_kitty_official; }
         ;;
-    pacman|dnf|zypper)
-        $INSTALL kitty && ok "Kitty installed." || fail "Kitty installation failed."
+    pacman)
+        $INSTALL kitty && ok "Kitty installed via pacman." \
+            || { warn "pacman install kitty falló, intentando instalador oficial..."; install_kitty_official; }
+        ;;
+    dnf)
+        $INSTALL kitty && ok "Kitty installed via dnf." \
+            || { warn "dnf install kitty falló, intentando instalador oficial..."; install_kitty_official; }
+        ;;
+    zypper)
+        $INSTALL kitty && ok "Kitty installed via zypper." \
+            || { warn "zypper install kitty falló, intentando instalador oficial..."; install_kitty_official; }
         ;;
 esac
 
-# Ruta del binario de Kitty (apt o instalador oficial)
+# Resolver ruta del binario (PATH o instalador oficial en ~/.local)
 KITTY_BIN="$(command -v kitty 2>/dev/null)"
 if [ -z "$KITTY_BIN" ] && [ -f "$HOME/.local/kitty.app/bin/kitty" ]; then
     KITTY_BIN="$HOME/.local/kitty.app/bin/kitty"
-    # Crear symlink para que el sistema lo encuentre
     mkdir -p "$HOME/.local/bin"
     ln -sf "$KITTY_BIN" "$HOME/.local/bin/kitty" 2>/dev/null || true
 fi
@@ -205,104 +214,204 @@ EOF
 
 ok "Kitty config written to $KITTY_CONF"
 
-# --- Crear .desktop file ---
-# Necesario para que el sistema y los DEs reconozcan Kitty como terminal
+# ── .desktop file (universal — requerido por xdg-mime, GNOME, KDE, etc.) ────
 DESKTOP_DIR="$HOME/.local/share/applications"
+SYSTEM_DESKTOP_DIR="/usr/share/applications"
 mkdir -p "$DESKTOP_DIR"
 
 cat > "$DESKTOP_DIR/kitty.desktop" << EOF
 [Desktop Entry]
 Name=Kitty
 Comment=Fast, feature-rich, GPU-based terminal emulator
-Exec=${KITTY_BIN:-kitty}
+Exec=${KITTY_BIN:-kitty} %u
 Icon=kitty
 Terminal=false
 Type=Application
 Categories=System;TerminalEmulator;
 StartupNotify=true
-MimeType=text/plain;
+MimeType=x-scheme-handler/terminal;
 EOF
 
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 ok "kitty.desktop created at $DESKTOP_DIR/kitty.desktop"
 
-# Actualizar base de datos de aplicaciones
-update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
-
-# --- Variable de entorno (universal) ---
+# ── Variable de entorno $TERMINAL (universal) ────────────────────────────────
 PROFILE_LINE='export TERMINAL=kitty'
 grep -qxF "$PROFILE_LINE" ~/.profile 2>/dev/null \
     || echo "$PROFILE_LINE" >> ~/.profile
 grep -qxF "$PROFILE_LINE" ~/.zshrc 2>/dev/null \
     || echo "$PROFILE_LINE" >> ~/.zshrc
-
 grep -qxF "alias term='kitty'" ~/.zshrc 2>/dev/null \
     || echo "alias term='kitty'" >> ~/.zshrc
-
 ok "TERMINAL=kitty set in ~/.profile and ~/.zshrc"
 
-# --- Configurar terminal predeterminada según el DE detectado ---
-echo "  Aplicando configuración para DE: $DE"
+# ── Capas universales de integración (se aplican siempre, en todas las distros)
+# Estas tres capas cubren la mayoría de los DEs y lanzadores:
+#   1. xdg-mime   → registra Kitty como handler del scheme "terminal://"
+#   2. update-alternatives → enlaza /usr/bin/x-terminal-emulator a Kitty
+#   3. $TERMINAL  → variable que leen muchos DEs / scripts como fallback
 
-# ── GNOME / Ubuntu ──────────────────────────────────────────────
-if echo "$DE" | grep -qi "gnome\|ubuntu\|unity"; then
-    if command -v gsettings >/dev/null 2>&1; then
-        gsettings set org.gnome.desktop.default-applications.terminal exec 'kitty' 2>/dev/null \
-            && ok "GNOME: terminal predeterminada → Kitty." \
-            || warn "gsettings falló (¿sesión gráfica activa?)."
-        # GNOME también respeta xdg-mime para abrir terminales
-        xdg-mime default kitty.desktop x-scheme-handler/terminal 2>/dev/null || true
-    else
-        warn "gsettings no encontrado."
-    fi
+echo "  Aplicando capas universales de integración..."
 
-# ── KDE Plasma ──────────────────────────────────────────────────
-elif echo "$DE" | grep -qi "kde\|plasma"; then
-    KDE_CONF="$HOME/.config/kdeglobals"
-    mkdir -p "$(dirname "$KDE_CONF")"
-    if grep -q "^Terminal=" "$KDE_CONF" 2>/dev/null; then
-        sed -i "s|^Terminal=.*|Terminal=${KITTY_BIN:-kitty}|" "$KDE_CONF"
-    else
-        echo "Terminal=${KITTY_BIN:-kitty}" >> "$KDE_CONF"
-    fi
-    ok "KDE: terminal predeterminada → Kitty."
-
-# ── XFCE ────────────────────────────────────────────────────────
-elif echo "$DE" | grep -qi "xfce"; then
-    if command -v xfconf-query >/dev/null 2>&1; then
-        xfconf-query -c xfce4-session -p /sessions/Failsafe/Client0_Command \
-            -s "${KITTY_BIN:-kitty}" 2>/dev/null \
-            && ok "XFCE: terminal predeterminada → Kitty." \
-            || warn "xfconf-query falló."
-    fi
-
-# ── MATE ─────────────────────────────────────────────────────────
-elif echo "$DE" | grep -qi "mate"; then
-    if command -v gsettings >/dev/null 2>&1; then
-        gsettings set org.mate.applications.terminal exec 'kitty' 2>/dev/null \
-            && ok "MATE: terminal predeterminada → Kitty." \
-            || warn "gsettings MATE falló."
-    fi
-
-# ── LXDE / LXQt ─────────────────────────────────────────────────
-elif echo "$DE" | grep -qi "lxde\|lxqt"; then
-    LXDE_CONF="$HOME/.config/lxterminal/lxterminal.conf"
-    if [ -f "$LXDE_CONF" ]; then
-        sed -i "s|^ExecTerminal=.*|ExecTerminal=${KITTY_BIN:-kitty}|" "$LXDE_CONF" 2>/dev/null || true
-    fi
-    ok "LXDE/LXQt: intentando configurar Kitty."
-
+# Capa 1 — xdg-mime (funciona en GNOME, KDE, XFCE, MATE, LXQt, etc.)
+if command -v xdg-mime >/dev/null 2>&1; then
+    xdg-mime default kitty.desktop x-scheme-handler/terminal 2>/dev/null \
+        && ok "xdg-mime: x-scheme-handler/terminal → kitty.desktop" \
+        || warn "xdg-mime falló (¿sesión gráfica activa?)."
 else
-    warn "DE '$DE' no detectado específicamente."
+    warn "xdg-mime no encontrado; saltando."
 fi
 
-# ── update-alternatives (fallback/complemento en sistemas Debian/Ubuntu) ───
+# Capa 2 — update-alternatives (Debian/Ubuntu/Fedora/openSUSE lo soportan)
 if command -v update-alternatives >/dev/null 2>&1 && [ -n "$KITTY_BIN" ] && [ -f "$KITTY_BIN" ]; then
     sudo update-alternatives --install /usr/bin/x-terminal-emulator \
         x-terminal-emulator "$KITTY_BIN" 50 2>/dev/null \
     && sudo update-alternatives --set x-terminal-emulator "$KITTY_BIN" 2>/dev/null \
     && ok "update-alternatives: x-terminal-emulator → Kitty." \
     || warn "update-alternatives falló (puede requerir sudo manual)."
+else
+    warn "update-alternatives no disponible en este sistema; saltando."
 fi
+
+# ── Configuración específica por DE (aditiva — no se excluyen entre sí) ──────
+echo "  Aplicando configuración específica para DE: $DE"
+
+# ── GNOME / Ubuntu / Unity ───────────────────────────────────────────────────
+if echo "$DE" | grep -qi "gnome\|ubuntu\|unity"; then
+    if command -v gsettings >/dev/null 2>&1; then
+        gsettings set org.gnome.desktop.default-applications.terminal exec "${KITTY_BIN:-kitty}" 2>/dev/null \
+            && gsettings set org.gnome.desktop.default-applications.terminal exec-arg "" 2>/dev/null \
+            && ok "GNOME: terminal predeterminada → Kitty." \
+            || warn "gsettings GNOME falló (¿sesión gráfica activa?)."
+    else
+        warn "gsettings no encontrado."
+    fi
+fi
+
+# ── KDE Plasma ───────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "kde\|plasma"; then
+    KDE_CONF="$HOME/.config/kdeglobals"
+    mkdir -p "$(dirname "$KDE_CONF")"
+    if grep -q "^\[General\]" "$KDE_CONF" 2>/dev/null; then
+        # Insertar o reemplazar Terminal= dentro de [General]
+        sed -i '/^\[General\]/,/^\[/ { s|^Terminal=.*|Terminal=${KITTY_BIN:-kitty}|; }' "$KDE_CONF" 2>/dev/null || true
+        grep -q "^Terminal=" "$KDE_CONF" 2>/dev/null \
+            || sed -i '/^\[General\]/a Terminal='"${KITTY_BIN:-kitty}" "$KDE_CONF" 2>/dev/null || true
+    else
+        printf '\n[General]\nTerminal=%s\n' "${KITTY_BIN:-kitty}" >> "$KDE_CONF"
+    fi
+    # konsolerc para que "Open terminal" en Dolphin también use Kitty
+    KONSOLE_RC="$HOME/.config/konsolerc"
+    mkdir -p "$(dirname "$KONSOLE_RC")"
+    grep -q "^\[Desktop Entry\]" "$KONSOLE_RC" 2>/dev/null \
+        || printf '[Desktop Entry]\nDefaultProfile=\n' >> "$KONSOLE_RC"
+    # kwalletrc / kio: algunos lanzadores de KDE leen TerminalApplication
+    KDE_APP_RC="$HOME/.config/kdedefaults/kdeglobals"
+    mkdir -p "$(dirname "$KDE_APP_RC")"
+    grep -q "^TerminalApplication=" "$KDE_APP_RC" 2>/dev/null \
+        && sed -i "s|^TerminalApplication=.*|TerminalApplication=${KITTY_BIN:-kitty}|" "$KDE_APP_RC" \
+        || echo "TerminalApplication=${KITTY_BIN:-kitty}" >> "$KDE_APP_RC"
+    ok "KDE: terminal predeterminada → Kitty (kdeglobals + kdedefaults)."
+fi
+
+# ── XFCE ─────────────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "xfce"; then
+    if command -v xfconf-query >/dev/null 2>&1; then
+        # Terminal emulator preferida para "Abrir terminal aquí"
+        xfconf-query -c xfce4-session -p /sessions/Failsafe/Client0_Command \
+            -t string -s "${KITTY_BIN:-kitty}" --create 2>/dev/null \
+            && ok "XFCE: sesión Failsafe → Kitty." \
+            || warn "xfconf-query sesión falló."
+        xfconf-query -c xfce4-keyboard-shortcuts \
+            -p "/commands/custom/<Primary><Alt>t" \
+            -t string -s "${KITTY_BIN:-kitty}" --create 2>/dev/null || true
+        xfconf-query -c xfce4-file-manager -p /misc-folder-open-on-dnd \
+            -t string -s "${KITTY_BIN:-kitty}" --create 2>/dev/null || true
+        ok "XFCE: terminal predeterminada → Kitty."
+    else
+        warn "xfconf-query no encontrado."
+    fi
+    # helpers.rc para Thunar y otros programas XFCE
+    XFCE_HELPERS="$HOME/.config/xfce4/helpers.rc"
+    mkdir -p "$(dirname "$XFCE_HELPERS")"
+    if grep -q "^TerminalEmulator=" "$XFCE_HELPERS" 2>/dev/null; then
+        sed -i "s|^TerminalEmulator=.*|TerminalEmulator=kitty|" "$XFCE_HELPERS"
+    else
+        echo "TerminalEmulator=kitty" >> "$XFCE_HELPERS"
+    fi
+    ok "XFCE: helpers.rc actualizado → TerminalEmulator=kitty."
+fi
+
+# ── MATE ──────────────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "mate"; then
+    if command -v gsettings >/dev/null 2>&1; then
+        gsettings set org.mate.applications.terminal exec "${KITTY_BIN:-kitty}" 2>/dev/null \
+            && gsettings set org.mate.applications.terminal exec-arg "" 2>/dev/null \
+            && ok "MATE: terminal predeterminada → Kitty." \
+            || warn "gsettings MATE falló."
+    else
+        warn "gsettings no encontrado."
+    fi
+fi
+
+# ── LXDE ─────────────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "lxde"; then
+    LXDE_CONF="$HOME/.config/lxterminal/lxterminal.conf"
+    if [ -f "$LXDE_CONF" ]; then
+        grep -q "^ExecTerminal=" "$LXDE_CONF" 2>/dev/null \
+            && sed -i "s|^ExecTerminal=.*|ExecTerminal=${KITTY_BIN:-kitty}|" "$LXDE_CONF" \
+            || echo "ExecTerminal=${KITTY_BIN:-kitty}" >> "$LXDE_CONF"
+    fi
+    # openbox / LXDE usa ~/.config/libfm/libfm.conf para "Abrir terminal aquí"
+    LIBFM_CONF="$HOME/.config/libfm/libfm.conf"
+    if [ -f "$LIBFM_CONF" ]; then
+        grep -q "^terminal=" "$LIBFM_CONF" 2>/dev/null \
+            && sed -i "s|^terminal=.*|terminal=${KITTY_BIN:-kitty}|" "$LIBFM_CONF" \
+            || sed -i '/^\[config\]/a terminal='"${KITTY_BIN:-kitty}" "$LIBFM_CONF" 2>/dev/null || true
+    fi
+    ok "LXDE: terminal predeterminada → Kitty."
+fi
+
+# ── LXQt ─────────────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "lxqt"; then
+    LXQT_CONF="$HOME/.config/lxqt/lxqt.conf"
+    mkdir -p "$(dirname "$LXQT_CONF")"
+    if grep -q "^terminal=" "$LXQT_CONF" 2>/dev/null; then
+        sed -i "s|^terminal=.*|terminal=${KITTY_BIN:-kitty}|" "$LXQT_CONF"
+    else
+        # Asegurarse de que la sección [General] exista
+        grep -q "^\[General\]" "$LXQT_CONF" 2>/dev/null \
+            || echo "[General]" >> "$LXQT_CONF"
+        sed -i '/^\[General\]/a terminal='"${KITTY_BIN:-kitty}" "$LXQT_CONF" 2>/dev/null || true
+    fi
+    ok "LXQt: terminal predeterminada → Kitty."
+fi
+
+# ── Cinnamon ─────────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "cinnamon\|x-cinnamon"; then
+    if command -v gsettings >/dev/null 2>&1; then
+        gsettings set org.cinnamon.desktop.default-applications.terminal exec "${KITTY_BIN:-kitty}" 2>/dev/null \
+            && gsettings set org.cinnamon.desktop.default-applications.terminal exec-arg "" 2>/dev/null \
+            && ok "Cinnamon: terminal predeterminada → Kitty." \
+            || warn "gsettings Cinnamon falló."
+    fi
+fi
+
+# ── Deepin / DDE ─────────────────────────────────────────────────────────────
+if echo "$DE" | grep -qi "deepin\|dde"; then
+    if command -v gsettings >/dev/null 2>&1; then
+        gsettings set com.deepin.desktop.default-applications.terminal exec "${KITTY_BIN:-kitty}" 2>/dev/null \
+            && ok "Deepin: terminal predeterminada → Kitty." \
+            || warn "gsettings Deepin falló."
+    fi
+fi
+
+# ── Fallback: si el DE no fue reconocido por ninguna rama ─────────────────────
+_de_known=0
+for _pat in gnome ubuntu unity kde plasma xfce mate lxde lxqt cinnamon x-cinnamon deepin dde; do
+    echo "$DE" | grep -qi "$_pat" && { _de_known=1; break; }
+done
+[ "$_de_known" -eq 0 ] && warn "DE '$DE' no reconocido; solo se aplicaron las capas universales (xdg-mime, \$TERMINAL, update-alternatives)."
 
 ########################################
 # 7. Fastfetch
