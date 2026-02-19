@@ -17,10 +17,17 @@ info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 
 # ── Confirmación de usuario ────────────────────────────────────────────────────
 # Uso: confirm "¿Instalar X?" && do_something
+# Lee siempre desde /dev/tty para funcionar correctamente con curl | bash
 confirm() {
-    local prompt="${1:-¿Continuar?}"
+    local prompt="${1:-¿Continuar?}" response
     echo -e "${YELLOW}[?]${NC} ${prompt} [s/N] \c"
-    read -r response
+    # Cuando el script llega via pipe (curl | bash), stdin es el pipe y no el
+    # teclado; leer de /dev/tty garantiza interactividad en ambos casos.
+    if [ -t 0 ]; then
+        read -r response
+    else
+        read -r response </dev/tty
+    fi
     case "$response" in
         [sS][iI]|[sS]) return 0 ;;
         *) info "Paso omitido por el usuario."; return 1 ;;
